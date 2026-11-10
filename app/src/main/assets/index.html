@@ -1,1 +1,133 @@
-assets/index.html
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>3D Компас</title>
+<style>
+:root{color-scheme:dark;--fg:#fff;--accent:#ff4b3e;--glass:rgba(0,0,0,.35);--bg:#0b1220;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+html,body{height:100%;margin:0;background:var(--bg);overflow:hidden;font-family:system-ui,-apple-system,Roboto,sans-serif;color:var(--fg)}
+body::before{content:"";position:fixed;inset:0;background:linear-gradient(160deg,#1b2a44,#05080f);z-index:0}
+#cam{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;z-index:1}
+#gl{position:fixed;inset:0;width:100%;height:100%;z-index:2;touch-action:none}
+#tape{position:fixed;left:0;right:0;top:env(safe-area-inset-top,0px);height:54px;z-index:3;width:100%;background:var(--glass)}
+#hud{position:fixed;left:0;right:0;bottom:env(safe-area-inset-bottom,0px);z-index:3;text-align:center;padding:10px 0 18px;background:linear-gradient(transparent,rgba(0,0,0,.55))}
+#deg{font-size:68px;font-weight:700;letter-spacing:2px;font-variant-numeric:tabular-nums;text-shadow:0 2px 8px #000}
+#dir{font-size:22px;color:#ffb3ac;margin-top:-6px}
+#att{font-size:14px;opacity:.85;margin-top:4px;font-variant-numeric:tabular-nums}
+#start{position:fixed;inset:0;z-index:9;display:flex;flex-direction:column;gap:14px;align-items:center;justify-content:center;background:rgba(5,8,15,.88);text-align:center;padding:24px}
+#start button{font-size:20px;padding:14px 28px;border:0;border-radius:28px;background:var(--accent);color:#fff;font-weight:600}
+#msg{font-size:13px;opacity:.7;max-width:320px}
+</style>
+</head>
+<body>
+<video id="cam" playsinline muted autoplay></video>
+<canvas id="gl"></canvas>
+<canvas id="tape"></canvas>
+<div id="hud"><div id="deg">000°</div><div id="dir">С</div><div id="att">Тангаж 0° · Крен 0°</div></div>
+<div id="start"><div style="font-size:26px;font-weight:700">3D Компас</div><div id="msg">Разрешите доступ к камере и датчикам движения. Если датчики недоступны, шар можно вращать пальцем.</div><button id="go">Запустить</button></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(function(){
+var D=Math.PI/180, canvas=document.getElementById('gl');
+var renderer=new THREE.WebGLRenderer({canvas:canvas,alpha:true,antialias:true});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2));
+var scene=new THREE.Scene(), camera=new THREE.PerspectiveCamera(50,1,0.1,50);
+scene.add(new THREE.AmbientLight(0xffffff,0.75));
+var dl=new THREE.DirectionalLight(0xffffff,0.9); dl.position.set(2,3,4); scene.add(dl);
+var group=new THREE.Group(); scene.add(group);
+
+// glass sphere
+group.add(new THREE.Mesh(new THREE.SphereGeometry(1,48,32),new THREE.MeshPhongMaterial({color:0x7fd4ff,transparent:true,opacity:0.16,shininess:140,specular:0xffffff,side:THREE.DoubleSide,depthWrite:false})));
+
+function lines(pts,color,op){var g=new THREE.BufferGeometry().setFromPoints(pts);return new THREE.LineSegments(g,new THREE.LineBasicMaterial({color:color,transparent:true,opacity:op}));}
+// latitude / meridian grid
+var grid=[];
+for(var lat=-60;lat<=60;lat+=30){var r=Math.cos(lat*D),y=Math.sin(lat*D);for(var i=0;i<72;i++){var a=i*5*D,b=(i+1)*5*D;grid.push(new THREE.Vector3(r*Math.sin(a),y,-r*Math.cos(a)),new THREE.Vector3(r*Math.sin(b),y,-r*Math.cos(b)));}}
+for(var m=0;m<180;m+=30){for(var j=0;j<72;j++){var p=j*5*D,q=(j+1)*5*D,c=Math.cos(m*D),s=Math.sin(m*D);
+ grid.push(new THREE.Vector3(Math.cos(p)*s,Math.sin(p),-Math.cos(p)*c),new THREE.Vector3(Math.cos(q)*s,Math.sin(q),-Math.cos(q)*c));}}
+group.add(lines(grid,0xbfe9ff,0.28));
+// equator degree scale
+var ticks=[],major=[];
+for(var t=0;t<360;t+=5){var len=t%30===0?0.12:(t%10===0?0.07:0.04),a=t*D,sx=Math.sin(a),cz=-Math.cos(a);
+ (t%30===0?major:ticks).push(new THREE.Vector3(sx,0,cz),new THREE.Vector3(sx*(1+len),0,cz*(1+len)));}
+group.add(lines(ticks,0xffffff,0.85));group.add(lines(major,0xffffff,1));
+// vertical pitch scale in N-S plane
+var vt=[];for(var e=-90;e<=90;e+=10){var l=e%30===0?0.09:0.04,ca=Math.cos(e*D),sa=Math.sin(e*D);vt.push(new THREE.Vector3(0,sa,-ca),new THREE.Vector3(0,sa*(1+l),-ca*(1+l)));}
+group.add(lines(vt,0xffe08a,0.8));
+// labels
+function label(txt,color,size,px){var c=document.createElement('canvas');c.width=c.height=128;var x=c.getContext('2d');x.font='bold '+px+'px system-ui,sans-serif';x.textAlign='center';x.textBaseline='middle';x.lineWidth=8;x.strokeStyle='rgba(0,0,0,.75)';x.strokeText(txt,64,66);x.fillStyle=color;x.fillText(txt,64,66);
+ var sp=new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(c),transparent:true,depthTest:false}));sp.scale.set(size,size,1);return sp;}
+var cards=[['С',0,'#ff5a4d'],['В',90,'#fff'],['Ю',180,'#fff'],['З',270,'#fff']];
+cards.forEach(function(k){var s=label(k[0],k[2],0.36,84),a=k[1]*D;s.position.set(1.28*Math.sin(a),0,-1.28*Math.cos(a));group.add(s);});
+for(var d=30;d<360;d+=30){if(d%90===0)continue;var s=label(String(d),'#dff3ff',0.2,56),a=d*D;s.position.set(1.22*Math.sin(a),0,-1.22*Math.cos(a));group.add(s);}
+var vs=label('↑','#ffe08a',0.2,64);vs.position.set(0,1.18,0);group.add(vs);
+// needle
+var n=new THREE.Mesh(new THREE.ConeGeometry(0.09,0.8,20),new THREE.MeshPhongMaterial({color:0xff3b30,shininess:80}));n.geometry.rotateX(-Math.PI/2);n.position.z=-0.4;group.add(n);
+var sn=new THREE.Mesh(new THREE.ConeGeometry(0.09,0.8,20),new THREE.MeshPhongMaterial({color:0xf2f2f2,shininess:80}));sn.geometry.rotateX(Math.PI/2);sn.position.z=0.4;group.add(sn);
+
+var dist=5;
+function resize(){var w=innerWidth,h=innerHeight;renderer.setSize(w,h,false);camera.aspect=w/h;
+ dist=Math.max(3.6,3.1/(2*Math.tan(25*D)*camera.aspect));camera.updateProjectionMatrix();group.position.set(0,0.1,-dist);
+ var tp=document.getElementById('tape'),r=renderer.getPixelRatio();tp.width=w*r;tp.height=54*r;}
+addEventListener('resize',resize);resize();
+
+// orientation
+var target=new THREE.Quaternion(),cur=new THREE.Quaternion(),active=false,beta=0,gamma=0;
+var zee=new THREE.Vector3(0,0,1),eu=new THREE.Euler(),q1=new THREE.Quaternion(-Math.sqrt(.5),0,0,Math.sqrt(.5)),q0=new THREE.Quaternion();
+function onOri(e){if(e.alpha==null)return;var alpha=e.alpha;
+ if(typeof e.webkitCompassHeading==='number')alpha=360-e.webkitCompassHeading;
+ active=true;beta=e.beta||0;gamma=e.gamma||0;
+ var o=((screen.orientation&&screen.orientation.angle)||window.orientation||0)*D;
+ eu.set(beta*D,alpha*D,-gamma*D,'YXZ');target.setFromEuler(eu);target.multiply(q1);target.multiply(q0.setFromAxisAngle(zee,-o));}
+// manual drag fallback
+var yaw=0,pit=-0.2,drag=null;
+canvas.addEventListener('pointerdown',function(e){drag=[e.clientX,e.clientY];});
+addEventListener('pointerup',function(){drag=null;});
+addEventListener('pointermove',function(e){if(!drag||active)return;yaw-=(e.clientX-drag[0])*0.008;pit-=(e.clientY-drag[1])*0.008;drag=[e.clientX,e.clientY];});
+
+function start(){
+ var msg=document.getElementById('msg');
+ if(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia){
+  navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}},audio:false}).then(function(st){var v=document.getElementById('cam');v.srcObject=st;v.play();}).catch(function(){});
+ }
+ var attach=function(){var ev=('ondeviceorientationabsolute' in window)?'deviceorientationabsolute':'deviceorientation';addEventListener(ev,onOri,true);};
+ if(typeof DeviceOrientationEvent!=='undefined'&&typeof DeviceOrientationEvent.requestPermission==='function'){
+  DeviceOrientationEvent.requestPermission().then(function(r){if(r==='granted')attach();}).catch(function(){});
+ }else attach();
+ document.getElementById('start').style.display='none';
+}
+document.getElementById('go').onclick=start;
+
+// HUD
+var degEl=document.getElementById('deg'),dirEl=document.getElementById('dir'),attEl=document.getElementById('att'),tape=document.getElementById('tape'),tx=tape.getContext('2d');
+var names=['С','СВ','В','ЮВ','Ю','ЮЗ','З','СЗ'],f=new THREE.Vector3(),u=new THREE.Vector3(),heading=0,sh=null;
+function drawTape(h){var r=renderer.getPixelRatio(),w=tape.width,H=tape.height;tx.clearRect(0,0,w,H);tx.save();tx.scale(r,r);var W=w/r,span=90,ppd=W/span;
+ tx.strokeStyle='#fff';tx.fillStyle='#fff';tx.textAlign='center';tx.font='bold 13px system-ui';
+ for(var d=Math.floor(h-span/2-1);d<=h+span/2+1;d++){if(d%5)continue;var x=W/2+(d-h)*ppd,dd=((d%360)+360)%360,big=d%15===0;
+  tx.lineWidth=big?2:1;tx.beginPath();tx.moveTo(x,54);tx.lineTo(x,big?36:44);tx.stroke();
+  if(big){var t=dd%45===0?names[dd/45]:String(dd);tx.fillStyle=dd===0?'#ff5a4d':'#fff';tx.fillText(t,x,28);}}
+ tx.fillStyle='#ff4b3e';tx.beginPath();tx.moveTo(W/2-7,0);tx.lineTo(W/2+7,0);tx.lineTo(W/2,10);tx.fill();tx.restore();}
+
+function loop(){
+ if(!active){target.setFromEuler(eu.set(pit,yaw,0,'YXZ'));beta=90+pit/D;gamma=0;}
+ cur.slerp(target,0.3);
+ group.quaternion.copy(cur).invert();
+ f.set(0,0,-1).applyQuaternion(cur);u.set(0,1,0).applyQuaternion(cur);
+ var x=f.x+u.x,z=f.z+u.z;
+ if(Math.abs(x)+Math.abs(z)>0.05){var h=Math.atan2(x,-z)/D;h=(h+360)%360;
+  if(sh===null)sh=h;else{var dl2=((h-sh+540)%360)-180;sh=(sh+dl2*0.5+360)%360;}heading=sh;}
+ var hr=Math.round(heading)%360;
+ degEl.textContent=String(hr).padStart(3,'0')+'°';
+ dirEl.textContent=names[Math.round(heading/45)%8];
+ var pitch=Math.round(Math.asin(Math.max(-1,Math.min(1,f.y)))/D),roll=Math.round(gamma);
+ attEl.textContent='Тангаж '+pitch+'° · Крен '+roll+'°';
+ drawTape(heading);
+ renderer.render(scene,camera);
+ requestAnimationFrame(loop);
+}
+loop();
+})();
+</script>
+</body>
+</html>
