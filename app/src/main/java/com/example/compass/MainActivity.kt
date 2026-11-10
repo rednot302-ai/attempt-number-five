@@ -1,1 +1,1 @@
-app/src/main/java/com/example/compass/MainActivity.kt
+app/src/main/java/com/example/compass
